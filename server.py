@@ -42,11 +42,6 @@ def load_yaml():
                 flash(err)
     except:
         flash('Error: File not found.')
-    if platforms:
-        for value in platforms.values():
-            if value['whitelist']:
-                for i in range(0, len(value['whitelist'])):
-                    value['whitelist'][i] = str(value['whitelist'][i])
     return platforms
 
 
@@ -182,7 +177,8 @@ def create():
                            'file': None,
                            'uploaded': None,
                            'downloads': 0,
-                           'whitelist': None}
+                           'otaargs': None,
+                           'whitelist': {}}
             if save_yaml(platforms):
                 flash('Success: Platform created.')
             else:
@@ -221,6 +217,45 @@ def delete():
         return render_template('status.html', platforms=platforms)
 
 
+@app.route('/otaargs', methods=['GET', 'POST'])
+def otaargs():
+    platforms = load_yaml()
+    if platforms and request.method == 'POST':
+        if 'Add' in request.form['action']:
+            # Ensure valid data.
+            if request.form['device'] and request.form['device'] != '--' and request.form['jsonargs']:
+                # Remove all unwanted characters.
+                __deviceargs = str(request.form['jsonargs'])
+                # Check length after clean-up makes up a full address.
+                if len(__deviceargs) != 0:
+                    # All looks good - add to otaargs.
+                    if not platforms[request.form['device']]['otaargs']:
+                        platforms[request.form['device']]['otaargs'] = []
+                    platforms[request.form['device']]['otaargs'] = __deviceargs
+                    if save_yaml(platforms):
+                        flash('Success: Json args added.')
+                    else:
+                        flash('Error: Could not save file.')
+                else:
+                    flash('Error: Json malformed.')
+            else:
+                flash('Error: No data entered.')
+        elif 'Override' in request.form['action']:
+            __macaddr = request.form['macaddr']
+            platforms[request.form['device']]['whitelist'][__macaddr]['otaargs'] = str(request.form['jsonargs'])
+            if save_yaml(platforms):
+                flash('Success: Json args overridden for ' + __macaddr + '.')
+            else:
+                flash('Error: Could not save file.')
+        else:
+            flash('Error: Unknown action.')
+
+    if platforms:
+        return render_template('otaargs.html', platforms=platforms)
+    else:
+        return render_template('status.html', platforms=platforms)
+
+
 @app.route('/whitelist', methods=['GET', 'POST'])
 def whitelist():
     platforms = load_yaml()
@@ -234,13 +269,13 @@ def whitelist():
                 if len(__mac) == 12:
                     # Check that address is not already on a whitelist.
                     for value in platforms.values():
-                        if value['whitelist'] and __mac in value['whitelist']:
+                        if value['whitelist'] and __mac in value['whitelist'].keys():
                             flash('Error: Address already on a whitelist.')
                             return render_template('whitelist.html', platforms=platforms)
                     # All looks good - add to whitelist.
                     if not platforms[request.form['device']]['whitelist']:
-                        platforms[request.form['device']]['whitelist'] = []
-                    platforms[request.form['device']]['whitelist'].append(__mac)
+                        platforms[request.form['device']]['whitelist'] = {}
+                    platforms[request.form['device']]['whitelist'][__mac] = {}
                     if save_yaml(platforms):
                         flash('Success: Address added.')
                     else:
@@ -250,7 +285,7 @@ def whitelist():
             else:
                 flash('Error: No data entered.')
         elif 'Remove' in request.form['action']:
-            platforms[request.form['device']]['whitelist'].remove(str(request.form['macaddr']))
+            platforms[request.form['device']]['whitelist'].pop(str(request.form['macaddr']),None)
             if save_yaml(platforms):
                 flash('Success: Address removed.')
             else:
@@ -271,4 +306,4 @@ def index():
 
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=int('5000'), debug=False)
+    app.run(host='0.0.0.0', port=int('5001'), debug=True)

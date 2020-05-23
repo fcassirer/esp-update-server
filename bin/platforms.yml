@@ -1,1 +1,18 @@
-{}
+dockside:
+  downloads: 0
+  file: null
+  otaargs: foo
+  uploaded: null
+  version: null
+  whitelist:
+    c82b9609b999:
+      otaargs: local99
+    c82b961e2dfb: {}
+poolside:
+  downloads: 0
+  file: null
+  otaargs: null
+  uploaded: null
+  version: null
+  whitelist:
+    c82b9609b971: {}
