@@ -11,9 +11,11 @@ This project provides a web-server written in Python Flask that supports this Ov
 The main feature are:
 
 - **Platform Names**: Each platform supported must be created on the web interface before a binary is uploaded. If an existing _platform name_ is not found in an uploaded binary it is rejected. Multiple devices can share the same _platform name_ and thus receive the same binary. Individual devices are controlled through _whitelists_ described below.
-- **Semantic Versioning**: Updates are only done if a newer version of a binary is available compared to the version the device is already running. Semantic versioning is assumed e.g. v1.0.2. The uploaded binary must contain a version number starting with _v_ and three version number components i.e MAJOR, MINOR, PATCH - _v1.0.2_. An uploaded binary is rejected if such a version number is not found in the binary or if the version number is not increased compared to the one already known. 
-- **Whitelists**: Download control is enforced by MAC Address whitelists. On the web interface WiFi MAC Addresses can be added and removed to created platforms. Only whitelisted devices will be allowed to update.
+- **Semantic Versioning**: Updates are only done if a newer version of a binary is available compared to the version the device is already running. Semantic versioning is assumed e.g. v1.0.2. The uploaded binary must contain a version number starting with _v_ and three version number components i.e MAJOR, MINOR, PATCH - _v1.0.2_. An uploaded binary is rejected if such a version number is not found in the binary or if the version number is not increased compared to the one already known.
+- **Accesslists**: Download control is enforced by MAC Address whitelists. On the web interface WiFi MAC Addresses can be added and removed to created platforms. Only whitelisted devices will be allowed to update.
 - **Binary Upload**: Uploading binaries is simple and administration is kept to a minimum by automatic detection of _platform name_ and _version number_.
+- **OTA Argument serving**: Make dynmaic/runtime arguments available to your devices.  As devices check for firmware updates, they can also request app-specific arguments to alter their mode.
+- **WiFi Serial logging**: Support (with proper client library) logging of serial output over WiFi to a managed/rolling set of logs.
 
 ## How Do I Use It?
 
@@ -119,7 +121,7 @@ void checkForUpdates(void)
   checkUrl.concat( "&dev=" + String(HOST) );
 
   Serial.println("INFO: Checking for updates at URL: " + String( checkUrl ) );
-  
+
   t_httpUpdate_return ret = ESPhttpUpdate.update( checkUrl );
 
   switch (ret) {
