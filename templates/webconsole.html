@@ -4,12 +4,7 @@
   <ul class=entries>
     {% if platforms: %}
       {% for key, value in platforms.items(): %}
-           {% if key in logs: %}
-           <li><h3>{{ key.title() }}  <a href="{{ url_for('webconsole',log=key) }}">(logs)</a><br></h3>
-           {% else %}
-           <li><h3>{{ key.title() }}</h3>
-           {% endif %}
-
+        <li><h3>{{ key.title() }}</h3>
           <table>
             <tr>
               <td>Version</td>
@@ -33,30 +28,19 @@
                 {% endif %}
               </td>
             </tr>
+            {% if logs: %}
             <tr>
-              <td>Downloads</td>
-              <td>&nbsp:&nbsp</td>
-              <td>
-                {% if value['downloads']: %}
-                  {{ value['downloads'] }}
-                {% else %}
-                  0
-                {% endif %}
-              </td>
-            </tr>
-            <tr>
-              <td valign="top">Accesslist</td>
+              <td valign="top">Logs</td>
               <td valign="top">&nbsp:&nbsp</td>
               <td>
-                {% if value['accesslist']: %}
-                  {% for device in value['accesslist']: %}
-                    {{ format_mac(device.upper()) }}<br>
-                  {% endfor %}
+                {% if key in logs: %}
+                <a href="{{ url_for('webconsole',log=key) }}">{{key}}</a><br>
                 {% else %}
                   None
                 {% endif %}
               </td>
             </tr>
+            {% endif %}
           </table>
       {% endfor %}
     {% else %}

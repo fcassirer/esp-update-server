@@ -1,0 +1,6 @@
+#/bin/bash
+
+eval "$(pyenv init -)"
+pyenv activate esp-server
+
+ESP_CONFIG=$PWD/esp-server.cfg python3 server.py

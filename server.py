@@ -1,10 +1,16 @@
 from datetime import datetime
-from flask import Flask, request, render_template, flash, redirect, url_for, send_from_directory
+from flask import Flask, request, render_template, flash, redirect, url_for, send_from_directory, Response, make_response
+import subprocess
+import signal
 from packaging import version
 import re
 import time
 import os
 import yaml
+import psutil
+
+import logging
+from logging.handlers import RotatingFileHandler, TimedRotatingFileHandler, WatchedFileHandler
 
 __author__ = 'Kristian Stobbe'
 __copyright__ = 'Copyright 2019, K. Stobbe'
@@ -19,8 +25,68 @@ ALLOWED_EXTENSIONS = set(['bin'])
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = './bin'
 app.config['SECRET_KEY'] = 'Kri57i4n570bb33r3nF1ink3rFyr'
+app.config.from_envvar('ESP_CONFIG')
 PLATFORMS_YAML = app.config['UPLOAD_FOLDER'] + '/platforms.yml'
 
+#
+# Create named rotating log files for the incoming /log POSTs from various
+#  endpoints (ESP8266 instances etc).
+#
+
+log_handlers = {}
+log_lastbuffer = {}
+maxlogsize = 4 * 1000000 # 4MB
+tsafe_vars = { 'ftpid': None }
+ota_selected = "__NONE__"
+
+def logit(ident,msg):
+
+  logid = ident.lower()
+  lfilename = 'remotelogs/{}.log'.format(logid)
+
+  # Do what a WatchedFileHandler() would if we could stack them ...
+  try:
+    stat = os.stat(lfilename)
+  except FileNotFoundError as e:
+    if logid in log_handlers:
+      log_event("file {} not found, resetting logger".format(lfilename))
+      for h in log_handlers[logid].handlers[:]:
+          h.close()
+          log_handlers[logid].removeHandler(h)
+      del log_handlers[logid]
+
+  if logid not in log_handlers:
+    try:
+      formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+      logger = logging.getLogger(logid)
+      logger.setLevel(logging.INFO)
+
+      comm='''
+      handler = WatchedFileHandler(lfilename,mode='a',delay=True)
+      handler.setFormatter(formatter)
+      logger.addHandler(handler)
+
+      handler = RotatingFileHandler(lfilename,maxBytes=maxlogsize, backupCount=5)
+      handler.setFormatter(formatter)
+      logger.addHandler(handler)
+      '''
+
+      handler = TimedRotatingFileHandler(lfilename,when="midnight", interval=1)
+      handler.setFormatter(formatter)
+      logger.addHandler(handler)
+
+      log_handlers[logid] = logger
+      log_lastbuffer[logid] = ""
+      log_event("Created handler for {}".format(logid))
+    except Exception as e:
+      log_event("Could not create logger '{}', e={}".format(logid,e))
+      return None
+
+  log_lastbuffer[logid] += msg
+  if msg[-1] == '\n':
+    log_handlers[logid].info(msg.strip('\n'))
+    log_lastbuffer[logid] = ""
+  return logid
 
 def log_event(msg):
     st = datetime.fromtimestamp(time.time()).strftime('%Y-%m-%d %H:%M:%S')
@@ -42,8 +108,21 @@ def load_yaml():
                 flash(err)
     except:
         flash('Error: File not found.')
-    return platforms
 
+    #  Now convert oldstyle platforms to the new format, not necessary on new runs
+    if platforms:
+      for key in platforms:
+        if 'whitelist' in platforms[key]:
+          # Old style, convert to more PC
+          platforms['accesslist'] = platforms['whitelist']
+          del platforms['whitelist']
+        if 'accesslist' in platforms[key] and isinstance(platforms[key]['accesslist'],list):
+          accesslist = platforms[key]['accesslist']
+          platforms[key]['accesslist'] = {}
+          for mac in accesslist:
+            platforms[key]['accesslist'][mac] = {}
+
+    return platforms
 
 def save_yaml(platforms):
     try:
@@ -54,6 +133,27 @@ def save_yaml(platforms):
         flash('Error: Data not saved.')
     return False
 
+def spawn_frontail(url_path,logname):
+    global frontails_pid
+    kill_frontail()
+    log_event("starting frontail using url={}".format(url_path))
+    ft = subprocess.Popen(['frontail','--url-path',url_path,'--theme','dark',logname],
+                          start_new_session=True)
+    time.sleep(2)
+    tsafe_vars['ftpid'] = ft.pid
+    log_event("Frontail pid: {}".format(ft.pid))
+    return ft.pid
+
+def kill_frontail(pid=None):
+    frontails_pid = tsafe_vars['ftpid']
+    log_event("Killing frontail, pid={}".format(frontails_pid))
+    if frontails_pid:
+      try:
+        os.kill(frontails_pid,signal.SIGKILL)
+        tsafe_vars['ftpid'] = None
+      except ProcessLookupError:
+        pass
+    return
 
 @app.context_processor
 def utility_processor():
@@ -62,29 +162,38 @@ def utility_processor():
     return dict(format_mac=format_mac)
 
 
+def parse_device_details(request):
+  __dev = request.args.get('dev', default=None)
+  __mac = None
+  __ver = request.args.get('ver', default=None)
+
+  if __dev:
+    __dev = __dev.lower()
+
+    for h in request.headers.keys():
+      if h.upper().endswith("STA-MAC"):
+        __mac = request.headers.get(h,default=None)
+        break
+
+    if __mac:
+      __mac = str(re.sub(r'[^0-9A-fa-f]+', '', __mac.lower()))
+    else:
+      log_event("WARN: request made without known headers.")
+
+    log_event("INFO: Dev: {} Ver: {} Mac: {}".format(__dev, __ver, __mac))
+
+  return [__dev, __ver, __mac]
+
 @app.route('/update', methods=['GET', 'POST'])
 def update():
     __error = 400
     platforms = load_yaml()
-    __dev = request.args.get('dev', default=None)
-    if 'X_ESP8266_STA_MAC' in request.headers:
-        __mac = request.headers['X_ESP8266_STA_MAC']
-        __mac = str(re.sub(r'[^0-9A-fa-f]+', '', __mac.lower()))
-        log_event("INFO: Update called by ESP8266 with MAC " + __mac)
-    elif 'x_ESP32_STA_MAC' in request.headers:
-        __mac = request.headers['x_ESP32_STA_MAC']
-        __mac = str(re.sub(r'[^0-9A-fa-f]+', '', __mac.lower()))
-        log_event("INFO: Update called by ESP32 with MAC " + __mac)
-    else:
-        __mac = ''
-        log_event("WARN: Update called without known headers.")
-    __ver = request.args.get('ver', default=None)
+    log_event("Req hdrs: \n{}".format(request.headers))
+    __dev, __ver, __mac = parse_device_details(request)
     if __dev and __mac and __ver:
-        log_event("INFO: Dev: " + __dev + "Ver: " + __ver)
-        __dev = __dev.lower()
         if platforms:
             if __dev in platforms.keys():
-                if __mac in platforms[__dev]['whitelist']:
+                if __mac in platforms[__dev]['accesslist']:
                     if version.parse(__ver) < version.parse(platforms[__dev]['version']):
                         if os.path.isfile(app.config['UPLOAD_FOLDER'] + '/' + platforms[__dev]['file']):
                             platforms[__dev]['downloads'] += 1
@@ -96,8 +205,8 @@ def update():
                         log_event("INFO: No update needed.")
                         return 'No update needed.', 304
                 else:
-                    log_event("ERROR: Device not whitelisted.")
-                    return 'Error: Device not whitelisted.', 400
+                    log_event("ERROR: Device not accesslisted.")
+                    return 'Error: Device not accesslisted.', 400
             else:
                 log_event("ERROR: Unknown platform.")
                 return 'Error: Unknown platform.', 400
@@ -161,7 +270,7 @@ def upload():
     if platforms:
         return render_template('upload.html')
     else:
-        return render_template('status.html', platforms=platforms)
+        return render_template('status.html', platforms=platforms, logs=log_handlers.keys())
 
 
 @app.route('/create', methods=['GET', 'POST'])
@@ -178,12 +287,12 @@ def create():
                            'uploaded': None,
                            'downloads': 0,
                            'otaargs': None,
-                           'whitelist': {}}
+                           'accesslist': {}}
             if save_yaml(platforms):
                 flash('Success: Platform created.')
             else:
                 flash('Error: Could not save file.')
-            return render_template('status.html', platforms=platforms)
+            return render_template('status.html', platforms=platforms, logs=log_handlers.keys())
         return redirect(request.url)
     return render_template('create.html')
 
@@ -208,74 +317,96 @@ def delete():
                         os.remove(os.path.join(app.config['UPLOAD_FOLDER'], old_file))
                     except:
                         flash('Error: Removing old file failed.')
-            return render_template('status.html', platforms=platforms)
+            return render_template('status.html', platforms=platforms, logs=log_handlers.keys())
         return redirect(request.url)
     platforms = load_yaml()
     if platforms:
         return render_template('delete.html', names=platforms.keys())
     else:
-        return render_template('status.html', platforms=platforms)
+        return render_template('status.html', platforms=platforms, logs=log_handlers.keys())
 
 
 @app.route('/otaargs', methods=['GET', 'POST'])
 def otaargs():
-    platforms = load_yaml()
-    if platforms and request.method == 'POST':
-        if 'Add' in request.form['action']:
-            # Ensure valid data.
-            if request.form['device'] and request.form['device'] != '--' and request.form['jsonargs']:
-                # Remove all unwanted characters.
-                __deviceargs = str(request.form['jsonargs'])
-                # Check length after clean-up makes up a full address.
-                if len(__deviceargs) != 0:
-                    # All looks good - add to otaargs.
-                    if not platforms[request.form['device']]['otaargs']:
-                        platforms[request.form['device']]['otaargs'] = []
-                    platforms[request.form['device']]['otaargs'] = __deviceargs
-                    if save_yaml(platforms):
-                        flash('Success: Json args added.')
-                    else:
-                        flash('Error: Could not save file.')
-                else:
-                    flash('Error: Json malformed.')
-            else:
-                flash('Error: No data entered.')
-        elif 'Override' in request.form['action']:
-            __macaddr = request.form['macaddr']
-            platforms[request.form['device']]['whitelist'][__macaddr]['otaargs'] = str(request.form['jsonargs'])
+  platforms = load_yaml()
+  global ota_selected
+  if platforms:
+    if request.method == 'POST':
+      _device = request.form['device']
+      ota_selected = _device
+      if 'Update' in request.form['action']:
+        # Ensure valid data.
+        if _device and _device != '--' and request.form['jsonargs']:
+          # Remove all unwanted characters.
+          __deviceargs = str(request.form['jsonargs'])
+          # Check length after clean-up makes up a full address.
+          if len(__deviceargs) != 0:
+            # All looks good - add to otaargs.
+            platforms[_device]['otaargs'] = __deviceargs
             if save_yaml(platforms):
-                flash('Success: Json args overridden for ' + __macaddr + '.')
+              flash('Success: Json args added.')
             else:
-                flash('Error: Could not save file.')
+              flash('Error: Could not save file.')
+          else:
+            flash('Error: Json malformed.')
         else:
-            flash('Error: Unknown action.')
+          flash('Error: No data entered.')
+      elif 'Override' in request.form['action']:
+        __macaddr = request.form['macaddr']
+        ovalue = str(request.form['jsonargs'])
+        if ovalue:
+          platforms[_device]['accesslist'][__macaddr]['otaargs'] = ovalue
+        else:
+          if 'otaargs' in platforms[_device]['accesslist'][__macaddr]:
+            del platforms[_device]['accesslist'][__macaddr]['otaargs']
+        if save_yaml(platforms):
+          flash('Success: Json args overridden for ' + __macaddr + '.')
+        else:
+          flash('Error: Could not save file.')
+      else:
+        flash('Error: Unknown action.')
 
-    if platforms:
-        return render_template('otaargs.html', platforms=platforms)
+      return render_template('otaargs.html', platforms=platforms,selected=ota_selected)
     else:
-        return render_template('status.html', platforms=platforms)
+      #log_event("Req hdrs: {}".format(request.headers))
+      __dev, __ver, __mac = parse_device_details(request)
+      otaargs = None
+      if __dev and __mac and __ver:
+        log_event("INFO: Dev: " + __dev + "Ver: " + __ver)
+        if platforms:
+          if __dev in platforms.keys():
+            if __mac in platforms[__dev]['accesslist']:
+              log_event("override otaargs: {},{},{}".format(__dev,__ver,__mac))
+              otaargs = platforms[__dev]['accesslist'][__mac].get('otaargs', platforms[__dev].get('otaargs', None))
+        log_event("OTAARGS is {}".format(otaargs if otaargs else "None"))
+        return make_response(otaargs,200)
+      else:
+        return render_template('otaargs.html', platforms=platforms,selected=ota_selected)
+  else:
+    return render_template('status.html', platforms=platforms, logs=log_handlers.keys())
 
 
-@app.route('/whitelist', methods=['GET', 'POST'])
-def whitelist():
+@app.route('/accesslist', methods=['GET', 'POST'])
+def accesslist():
     platforms = load_yaml()
     if platforms and request.method == 'POST':
         if 'Add' in request.form['action']:
             # Ensure valid data.
             if request.form['device'] and request.form['device'] != '--' and request.form['macaddr']:
                 # Remove all unwanted characters.
-                __mac = str(re.sub(r'[^0-9A-fa-f]+', '', request.form['macaddr']).lower())
+                __mac = str(re.sub(r'[^0-9A-Fa-f]+', '', request.form['macaddr']).lower())
                 # Check length after clean-up makes up a full address.
                 if len(__mac) == 12:
-                    # Check that address is not already on a whitelist.
+                    # Check that address is not already on a accesslist.
+                    print(platforms.values())
                     for value in platforms.values():
-                        if value['whitelist'] and __mac in value['whitelist'].keys():
-                            flash('Error: Address already on a whitelist.')
-                            return render_template('whitelist.html', platforms=platforms)
-                    # All looks good - add to whitelist.
-                    if not platforms[request.form['device']]['whitelist']:
-                        platforms[request.form['device']]['whitelist'] = {}
-                    platforms[request.form['device']]['whitelist'][__mac] = {}
+                        if value['accesslist'] and __mac in value['accesslist']:
+                            flash('Error: Address already on a accesslist.')
+                            return render_template('accesslist.html', platforms=platforms)
+                    # All looks good - add to accesslist.
+                    if not platforms[request.form['device']]['accesslist']:
+                        platforms[request.form['device']]['accesslist'] = {}
+                    platforms[request.form['device']]['accesslist'][__mac] = {}
                     if save_yaml(platforms):
                         flash('Success: Address added.')
                     else:
@@ -285,7 +416,7 @@ def whitelist():
             else:
                 flash('Error: No data entered.')
         elif 'Remove' in request.form['action']:
-            platforms[request.form['device']]['whitelist'].pop(str(request.form['macaddr']),None)
+            platforms[request.form['device']]['accesslist'].pop(str(request.form['macaddr']),None)
             if save_yaml(platforms):
                 flash('Success: Address removed.')
             else:
@@ -294,16 +425,57 @@ def whitelist():
             flash('Error: Unknown action.')
 
     if platforms:
-        return render_template('whitelist.html', platforms=platforms)
+        return render_template('accesslist.html', platforms=platforms)
     else:
-        return render_template('status.html', platforms=platforms)
+        return render_template('status.html', platforms=platforms,logs=log_handlers.keys())
 
+@app.route('/log', methods=['GET', 'POST'])
+def debuglog():
+    msg = request.get_data().decode("utf-8")
+    ident = request.args.get('id', default="Debug")
+    #log_event("({}): {}".format(ident,msg.strip('\n')))
+    logit(ident,msg)
+    return ident
+
+@app.route('/webconsole', methods=['GET', 'POST'])
+def webconsole():
+  platforms = load_yaml()
+  lname = request.args.get('log', default=None)
+  if lname == None:
+    return render_template('webconsole.html', platforms=platforms,logs=log_handlers.keys())
+
+  lfile = None
+  if lname in log_handlers:
+    paths = []
+    for handler in log_handlers[lname].handlers:
+      if isinstance(handler, logging.FileHandler):
+        lfile = handler.baseFilename
+        log_event("Path: {}".format(lfile))
+
+    log_event("Log found: {} for {}".format(lname,lfile))
+  else:
+    flash('Could not find log file for "{}"'.format(lname))
+    return make_response('not found',404)
+
+  frontail_url = "http://0.0.0.0:9001/{}".format(lname)
+  spawn_frontail("/"+lname,lfile)
+  log_event("log={}, url={}".format(lname,frontail_url))
+  return render_template('logging.html', log=lname, frontail_url=frontail_url)
+
+@app.route('/endlogger', methods=['GET'])
+def end_logger():
+  log_event("Killing fronttail ...")
+  kill_frontail()
+  log_event("loggers = {}".format(log_handlers.keys()))
+  return make_response('ok', 200)
 
 @app.route('/')
 def index():
     platforms = load_yaml()
-    return render_template('status.html', platforms=platforms)
-
+    return render_template('status.html', platforms=platforms, logs=log_handlers.keys())
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=int('5001'), debug=True)
+    platforms = load_yaml()
+    for p in platforms.keys():
+      logit(p,"ESP Server Restart\n")
+    app.run(host='0.0.0.0', port=int('5000'), debug=True)

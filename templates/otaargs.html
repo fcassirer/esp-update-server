@@ -1,0 +1,63 @@
+{% extends "layout.html" %}
+{% block body %}
+  <h2>Manage OTA Arguments</h2>
+  <form name="add" action="{{ url_for('otaargs') }}" method=post class=add-entry >
+    <dl>
+      <dt>Platform:
+      <dd><select onChange="updateArgsInput('deviceSelect')" name=device id="deviceSelect">
+        {% if platforms.keys() %}
+          {% for name in platforms.keys() %}
+        <option value="{{ name }}"
+          {%- if selected == name -%}
+                selected
+          {%- endif %}
+
+                jsonargs="{{platforms[name].get('otaargs','')}}">{{ name.title() }}
+        </option>
+          {% endfor %}
+        {% endif %}
+      </select>
+      <dt>OTA arguments for all devices of selected {{ selected }} type:
+      <dd><input type=text size=30 name=jsonargs id="jsonargs">
+      <dd><input type=submit name=action value=Update>
+    </dl>
+  </form>
+
+  <table>
+    <tr>
+      <th>Platform</th>
+      <th>MAC Address</th>
+      <th>OTA Override Arguments</th>
+      <th></th>
+    </tr>
+    {% for key, value in platforms.items(): %}
+      {% if value['accesslist']: %}
+        {% for mac in value['accesslist']: %}
+        <tr>
+          <td>{{ key.title() }}</td>
+          <td>{{ format_mac(mac.upper()) }}</td>
+          <td>
+            <form name="Override" action="{{ url_for('otaargs') }}" method=post class=add-entry >
+              <input type="hidden" value="{{ mac }}" name="macaddr" />
+              <input type="hidden" value="{{ key }}" name="device" />
+              {% set o_val = platforms[key]['accesslist'][mac].get('otaargs','') %}
+              <dd><input type=text size=30 name=jsonargs value="{{ o_val }}">
+              <input type=submit name=action value=Override>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      {% endif %}
+    {% endfor %}
+  </table>
+  <script>
+  function updateArgsInput(sel) {
+    var device = document.getElementById(sel)
+    var jsonargs = device.options[device.selectedIndex].getAttribute("jsonargs");
+    document.getElementById('jsonargs').value = jsonargs;
+  }
+  updateArgsInput()
+</script>
+<script src="https://code.jquery.com/jquery-3.3.1.min.js" integrity="sha256-FgpCb/KJQlLNfOu91ta32o/NMZxltwRo8QtmkMRdAu8=" crossorigin="anonymous">
+</script>
+{% endblock %}

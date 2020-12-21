@@ -1,7 +1,7 @@
 {% extends "layout.html" %}
 {% block body %}
   <h2>Manage Whitelists</h2>
-  <form name="add" action="{{ url_for('whitelist') }}" method=post class=add-entry >
+  <form name="add" action="{{ url_for('accesslist') }}" method=post class=add-entry >
     <dl>
       <dt>MAC Address:
       <dd><input type=text size=30 name=macaddr>
@@ -25,13 +25,13 @@
       <th></th>
     </tr>
     {% for key, value in platforms.items(): %}
-      {% if value['whitelist']: %}
-        {% for mac in value['whitelist']: %}
+      {% if value['accesslist']: %}
+        {% for mac in value['accesslist']: %}
         <tr>
           <td>{{ key.title() }}</td>
           <td>{{ format_mac(mac.upper()) }}</td>
           <td>
-            <form name="remove" action="{{ url_for('whitelist') }}" method=post class=add-entry >
+            <form name="remove" action="{{ url_for('accesslist') }}" method=post class=add-entry >
               <input type="hidden" value="{{ key }}" name="device" />
               <input type="hidden" value="{{ mac }}" name="macaddr" />
               <input type=submit name=action value=Remove>
