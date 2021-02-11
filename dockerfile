@@ -13,8 +13,11 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
 
 
 COPY . /esp-update-server
+RUN mkdir -p /usr/local/bin
+RUN FRONTAIL_VERSION=`curl https://github.com/mthenw/frontail/releases/latest 2>/dev/null | grep -Po 'v[0-9]+.[0-9]+.[0-9]+'` && \
+  wget -O /usr/local/bin/frontail https://github.com/mthenw/frontail/releases/download/${FRONTAIL_VERSION}/frontail-linux;chmod +x /usr/local/bin/frontail
 WORKDIR /esp-update-server
 RUN python3 -m pip install --upgrade pip
 RUN pip3 install -r requirements.txt
-EXPOSE 5000
+EXPOSE 5000 9001
 CMD ESP_CONFIG=esp-container-config.cfg  python3 ./server.py
