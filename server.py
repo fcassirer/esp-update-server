@@ -25,7 +25,8 @@ ALLOWED_EXTENSIONS = set(['bin'])
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = './bin'
 app.config['SECRET_KEY'] = 'Kri57i4n570bb33r3nF1ink3rFyr'
-app.config.from_envvar('ESP_CONFIG')
+if os.environ.get("ESP_CONFIG"):
+  app.config.from_envvar('ESP_CONFIG')
 PLATFORMS_YAML = app.config['UPLOAD_FOLDER'] + '/platforms.yml'
 
 #
